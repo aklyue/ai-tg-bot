@@ -33,4 +33,4 @@ COPY . .
 RUN mkdir -p logs
 
 # Запускаем бота
-CMD ["python", "-m", "bot.main"]
+# CMD ["python", "-m", "bot.main"]
