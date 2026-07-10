@@ -3,7 +3,7 @@ import os
 import aiohttp
 from datetime import datetime
 from playwright.async_api import async_playwright
-from bot.rag import add_documents_to_db, clear_collection
+from bot.rag import add_documents_to_db, ensure_collection_exists
 import tempfile
 import zipfile
 from io import BytesIO
@@ -102,6 +102,7 @@ def extract_zip_text(content: bytes) -> str:
 async def parse_website(url: str):
     """Парсинг сайта через Playwright с обходом защиты от ботов"""
     meta = SOURCES_META.get(url, {"name": url, "type": "website"})
+    log_parsing(url, "INFO", f"Начало процесса парсинга: {meta['name']}")
     try:
         async with async_playwright() as p:
             chromium_path = os.getenv("PLAYWRIGHT_CHROMIUM_PATH")
@@ -114,8 +115,11 @@ async def parse_website(url: str):
                     "--disable-features=IsolateOrigins,site-per-process"
                 ]
             }
+            
             if chromium_path:
                 launch_kwargs["executable_path"] = chromium_path
+                
+            log_parsing(url, "INFO", "Запуск браузера...")
             browser = await p.chromium.launch(**launch_kwargs)
             
             # Создаем контекст с более реалистичными настройками
@@ -151,12 +155,14 @@ async def parse_website(url: str):
                 "Cache-Control": "max-age=0",
             })
             
+            log_parsing(url, "INFO", f"Переход на главную: {url}")
             # Устанавливаем большой таймаут для SPA
             await page.goto(url, wait_until="domcontentloaded", timeout=120000)
             
             # Ждём полной загрузки контента
             await page.wait_for_timeout(5000)
             
+            log_parsing(url, "INFO", "Скроллинг для подгрузки контента...")
             # Скроллим для загрузки ленивого контента
             for i in range(5):
                 await page.evaluate(f"window.scrollTo(0, {(i + 1) * 300})")
@@ -167,6 +173,7 @@ async def parse_website(url: str):
 
             # Пробуем разные способы получить контент
             content = ""
+            log_parsing(url, "INFO", "Извлечение текстового контента...")
             
             # Способ 1: innerText
             try:
@@ -216,6 +223,7 @@ async def parse_website(url: str):
 
             # Собираем внутренние ссылки
             try:
+                log_parsing(url, "INFO", "Поиск внутренних ссылок...")
                 all_links = await page.eval_on_selector_all(
                     "a[href]",
                     "elements => elements.map(el => el.href)"
@@ -225,6 +233,7 @@ async def parse_website(url: str):
 
             base_domain = url.rstrip("/").split("//")[1] if "//" in url else url
             internal_pages = set()
+            log_parsing(url, "INFO", f"Найдено {len(internal_pages)} внутренних ссылок. Парсим первые 10...")
             for link in all_links:
                 if base_domain in link and not link.endswith((".pdf", ".zip", ".jpg", ".png", "#")):
                     if link not in internal_pages:
@@ -233,6 +242,7 @@ async def parse_website(url: str):
             # Парсим внутренние страницы
             for link in list(internal_pages)[:10]:
                 try:
+                    log_parsing(url, "INFO", f"[{i+1}/10] Парсинг ссылки: {link}")
                     await page.goto(link, wait_until="domcontentloaded", timeout=30000)
                     await page.wait_for_timeout(3000)
                     for i in range(3):
@@ -240,12 +250,14 @@ async def parse_website(url: str):
                         await page.wait_for_timeout(1000)
                     page_content = await page.evaluate("document.body.innerText")
                     content += f"\n\n=== {link} ===\n\n" + page_content
-                except Exception:
-                    pass
+                except Exception as e:
+                    log_parsing(url, "WARNING", f"Ошибка при парсинге {link}: {e}")
 
             await browser.close()
+            log_parsing(url, "INFO", "Браузер закрыт.")
 
             enriched = f"Информация о {meta['name']}. Сайт: {url}\n\n{content}"
+            log_parsing(url, "INFO", "Отправка данных в базу знаний...")
             await asyncio.to_thread(add_documents_to_db, enriched, {"source": url, "type": "website"})
             log_parsing(url, "SUCCESS", f"{meta['name']}: {len(content)} символов, {len(internal_pages)} страниц")
             return True
@@ -383,22 +395,22 @@ async def parse_document(url: str):
         return False
 
 
+
 async def sync_knowledge_base():
     print("=" * 50)
     print("Начинаем обновление базы знаний...")
     print("=" * 50)
 
-    clear_collection()
-    log_parsing("SYSTEM", "INFO", "Коллекция очищена")
-
-    # Парсим сайты и документы параллельно
-    tasks = []
-    for url in KNOWLEDGE_SOURCES["websites"]:
-        tasks.append(parse_website(url))
-    for url in KNOWLEDGE_SOURCES["documents"]:
-        tasks.append(parse_document(url))
+    # УБРАТЬ: clear_collection() <-- Эту строку удалить!
     
-    await asyncio.gather(*tasks)
+    # Сначала создаем один раз, чтобы избежать гонки
+    ensure_collection_exists()
+
+    for url in KNOWLEDGE_SOURCES["documents"]:
+        await parse_document(url)
+        
+    for url in KNOWLEDGE_SOURCES["websites"]:
+        await parse_website(url)
 
     print("=" * 50)
     success_count = sum(1 for e in parsing_log if e["status"] == "SUCCESS")
