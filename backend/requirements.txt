@@ -1,0 +1,14 @@
+aiogram>=3.2.0
+langchain-openai
+langchain-qdrant
+langchain-community
+qdrant-client
+playwright
+aiohttp
+aiohttp-socks
+python-dotenv
+fastapi
+uvicorn
+pydantic
+pypdf
+beautifulsoup4
