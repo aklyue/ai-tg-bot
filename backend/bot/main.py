@@ -9,6 +9,7 @@ from bot.rag import get_answer, get_answer_stream
 from bot.stt import transcribe_audio
 import os
 from datetime import datetime
+from aiohttp import web
 
 from dotenv import load_dotenv
 
@@ -31,6 +32,19 @@ if TELEGRAM_PROXY:
 
 bot = Bot(token=TOKEN, **bot_kwargs)
 dp = Dispatcher()
+
+async def health_check(request):
+    return web.Response(text="Bot is running")
+
+async def start_web_server():
+    app = web.Application()
+    app.add_routes([web.get('/', health_check)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"Web server started on port {port}")
 
 # Хранилище истории диалогов (в продакшене заменить на БД)
 # user_id -> [(role, text), ...]
