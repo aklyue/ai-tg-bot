@@ -1,0 +1,77 @@
+services:
+  bot:
+    build: .
+    container_name: real-estate-bot
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      - TG_BOT_TOKEN=${TG_BOT_TOKEN}
+      - TELEGRAM_PROXY=${TELEGRAM_PROXY}
+      - SONIOX_API_KEY=${SONIOX_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - MIN_RELEVANCE_SCORE=${MIN_RELEVANCE_SCORE:-0.15}
+    volumes:
+      - ./qdrant_data:/app/qdrant_data
+      - ./logs/bot:/app/logs
+    command: ["python", "-m", "bot.main"]
+    networks:
+      - app-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+
+  # API сервер для админки
+  api:
+    build: .
+    container_name: real-estate-bot-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - TG_BOT_TOKEN=${TG_BOT_TOKEN}
+      - SONIOX_API_KEY=${SONIOX_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      - QDRANT_URL=https://a9382634-7467-4ba9-9930-3eb13945b2b4.us-west-2-0.aws.cloud.qdrant.io:6333
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
+      - MIN_RELEVANCE_SCORE=${MIN_RELEVANCE_SCORE:-0.15}
+    volumes:
+      - ./qdrant_data:/app/qdrant_data
+      - ./logs/api:/app/logs
+    command: ["python", "api.py"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    networks:
+      - app-network
+
+  # Qdrant векторная база данных
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - ./qdrant_data:/qdrant/storage
+    networks:
+      - app-network
+    environment:
+      - QDRANT_URL=https://a9382634-7467-4ba9-9930-3eb13945b2b4.us-west-2-0.aws.cloud.qdrant.io:6333
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  qdrant_data:
