@@ -23,7 +23,7 @@ TOKEN = os.environ["TG_BOT_TOKEN"]
 TELEGRAM_PROXY = (
     os.getenv("TELEGRAM_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
 )
-API_BASE_URL = os.getenv("API_BASE_URL", "http://api:8000")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://ai-tg-bot-bqlk.onrender.com")
 
 bot_kwargs = {"default": DefaultBotProperties(parse_mode="HTML")}
 if TELEGRAM_PROXY:
