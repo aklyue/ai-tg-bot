@@ -242,6 +242,7 @@ async def handle_text(message: types.Message):
 
 
 async def main():
+    await start_web_server()
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
