@@ -1,0 +1,1 @@
+window.__API_URL__ = "__API_URL__";
