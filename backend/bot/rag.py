@@ -218,18 +218,16 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
             ]
         )
 
-    docs = []
-
     try:
         if qdrant_filter:
-            docs = vs.similarity_search(
+            docs = vs.max_marginal_relevance_search(
                 search_query,
                 k=20,
                 fetch_k=100,
                 filter=qdrant_filter,
             )
         else:
-            docs = vs.similarity_search(
+            docs = vs.max_marginal_relevance_search(
                 search_query,
                 k=20,
                 fetch_k=100,
@@ -239,9 +237,10 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
         if not docs:
             print("DEBUG: fallback без фильтра")
 
-            docs = vs.similarity_search(
+            docs = vs.max_marginal_relevance_search(
                 search_query,
                 k=5,
+                fetch_k=20,
             )
 
             print(f"DEBUG: найдено без фильтра = {len(docs)}")
