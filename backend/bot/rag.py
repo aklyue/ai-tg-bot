@@ -186,23 +186,28 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
             for project in projects:
                 project_query = f"ЖК {project} {query}"
                 results = _search_relevant_docs(vs, project_query, k=6)
-                # Fallback: даже если есть результаты, добавляем больше для полной картины
                 fallback_results = _search_docs_fallback(vs, project_query, k=6)
                 for doc in fallback_results:
                     if doc not in results:
                         results.append(doc)
                 docs.extend(results)
         else:
-            docs = _search_relevant_docs(vs, search_query, k=12)
-            # Fallback: если указано название ЖК, но релевантных документов нет
+            # ИСПРАВЛЕНИЕ: Если упомянут ОДИН конкретный ЖК (например, Бестселлер)
             if projects:
-                fallback_results = _search_docs_fallback(
-                    vs, f"ЖК {projects[0]} {search_query}", k=5
+                # Первым делом жестко ищем именно этот ЖК, чтобы он был в ТОПе списка и его не отрезало
+                docs = _search_relevant_docs(
+                    vs, f"ЖК {projects[0]} {search_query}", k=8
                 )
-                # Добавляем fallback-результаты, которые ещё не в docs
+                # Добираем fallback тоже по этому ЖК
+                fallback_results = _search_docs_fallback(
+                    vs, f"ЖК {projects[0]} {search_query}", k=4
+                )
                 for doc in fallback_results:
                     if doc not in docs:
                         docs.append(doc)
+            else:
+                # Если ЖК вообще не назван (общий вопрос), ищем стандартно
+                docs = _search_relevant_docs(vs, search_query, k=12)
 
     except Exception as e:
         print(f"Ошибка поиска в Qdrant: {e}")
