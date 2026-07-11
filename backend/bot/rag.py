@@ -183,7 +183,8 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
         ]
 
         if prev_questions:
-            search_query = " ".join(prev_questions[-2:]) + " " + query
+            search_query = " ".join(prev_questions[-2:] + [query])
+            search_query = " ".join(dict.fromkeys(search_query.split()))
 
     print(f"\nDEBUG: search_query = {search_query}")
 
@@ -217,19 +218,21 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
             ]
         )
 
+    docs = []
+
     try:
         if qdrant_filter:
-            docs = vs.max_marginal_relevance_search(
+            docs = vs.similarity_search(
                 search_query,
-                k=15,
-                fetch_k=50,
+                k=20,
+                fetch_k=100,
                 filter=qdrant_filter,
             )
         else:
-            docs = vs.max_marginal_relevance_search(
+            docs = vs.similarity_search(
                 search_query,
-                k=15,
-                fetch_k=50,
+                k=20,
+                fetch_k=100,
             )
 
         # fallback
