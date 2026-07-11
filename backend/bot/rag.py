@@ -5,9 +5,18 @@ from langchain_qdrant import QdrantVectorStore
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.prompts import ChatPromptTemplate
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import Distance, VectorParams
+from qdrant_client.http.models import (
+    Distance,
+    VectorParams,
+    MatchAny,
+    Filter,
+    FieldCondition,
+)
+
 from typing import List, Optional
 import asyncio
+
+from parser import SOURCES_META
 
 from dotenv import load_dotenv
 
@@ -144,15 +153,55 @@ def add_documents_to_db(text: str, metadata: dict):
     vs.add_documents(docs)
 
 
-def _search_relevant_docs(vs: QdrantVectorStore, query: str, k: int):
-    """Вернуть только достаточно релевантные документы для ответа."""
-    results = vs.similarity_search_with_score(query, k=k)
+# Вспомогательная функция: собирает ссылки для конкретного ЖК из твоего SOURCES_META
+def get_urls_for_project(project_name: str) -> list:
+    return [
+        url
+        for url, meta in SOURCES_META.items()
+        if project_name.lower() in meta["name"].lower()
+    ]
+
+
+def _search_relevant_docs(
+    vs: QdrantVectorStore, query: str, k: int, project_filter: str = None
+):
+    """Строгий поиск с фильтрацией по ссылкам конкретного ЖК."""
+    qdrant_filter = None
+    if project_filter:
+        # Получаем только те URL, которые относятся к нужному ЖК (Алиса или Бестселлер)
+        project_urls = get_urls_for_project(project_filter)
+
+        # Говорим Qdrant: "Вытащи чанки, у которых metadata.source равен ОДНОМУ из этих URL"
+        qdrant_filter = Filter(
+            must=[
+                FieldCondition(
+                    key="metadata.source",
+                    match=MatchAny(
+                        any=project_urls
+                    ),  # Фильтр по списку разрешенных ссылок
+                )
+            ]
+        )
+
+    results = vs.similarity_search_with_score(query, k=k, filter=qdrant_filter)
     return [doc for doc, score in results if score >= MIN_RELEVANCE_SCORE]
 
 
-def _search_docs_fallback(vs: QdrantVectorStore, query: str, k: int):
-    """Fallback для явно названных ЖК, если score-фильтр оказался слишком строгим."""
-    return vs.similarity_search(query, k=k)
+def _search_docs_fallback(vs: QdrantVectorStore, query: str, k: int, project_filter: str = None):
+    """Запасной поиск с фильтрацией по ссылкам конкретного ЖК."""
+    qdrant_filter = None
+    if project_filter:
+        project_urls = get_urls_for_project(project_filter)
+        qdrant_filter = Filter(
+            must=[
+                FieldCondition(
+                    key="metadata.source",
+                    match=MatchAny(any=project_urls)
+                )
+            ]
+        )
+        
+    return vs.similarity_search(query, k=k, filter=qdrant_filter)
 
 
 def _build_prompt_and_search(query: str, history: Optional[List] = None):
@@ -183,35 +232,22 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
     docs = []
     try:
         if len(projects) >= 2:
+            # Юзер сравнивает два ЖК. Делаем два изолированных запроса по одной фразе юзера!
             for project in projects:
-                # 1. Определяем, кто конкурент для текущего цикла
-                other_project = "Алиса" if project == "Бестселлер" else "Бестселлер"
+                # Qdrant залезет ТОЛЬКО в ссылки текущего ЖК и выберет оттуда ТОП-4 чанка по ипотеке
+                results = _search_relevant_docs(vs, query, k=4, project_filter=project)
+                fallback_results = _search_docs_fallback(vs, query, k=4, project_filter=project)
                 
-                # 2. Полностью вырезаем конкурента из запроса, чтобы не косило вектор
-                # Строка 'Сравни ипотеку ЖК Алиса и ЖК Бестселлер' превратится в 'Сравни ипотеку ЖК '
-                clean_query = query.lower().replace(other_project.lower(), "").strip()
-                
-                # 3. Собираем идеальный прицельный запрос для базы
-                # Получится: 'ЖК Бестселлер Сравни ипотеку'
-                project_query = f"ЖК {project} {clean_query}"
-                
-                results = _search_relevant_docs(vs, project_query, k=6)
-                fallback_results = _search_docs_fallback(vs, project_query, k=6)
                 for doc in fallback_results:
                     if doc not in results:
                         results.append(doc)
-                docs.extend(results)
+                docs.extend(results) # Сюда лягут 4 куска строго по Алисе и 4 куска строго по Бестселлеру
         else:
             # ИСПРАВЛЕНИЕ: Если упомянут ОДИН конкретный ЖК (например, Бестселлер)
             if projects:
-                # Первым делом жестко ищем именно этот ЖК, чтобы он был в ТОПе списка и его не отрезало
-                docs = _search_relevant_docs(
-                    vs, f"ЖК {projects[0]} {search_query}", k=8
-                )
-                # Добираем fallback тоже по этому ЖК
-                fallback_results = _search_docs_fallback(
-                    vs, f"ЖК {projects[0]} {search_query}", k=4
-                )
+                target_project = projects[0] # берем первый найденный ЖК
+                docs = _search_relevant_docs(vs, search_query, k=8, project_filter=target_project)
+                fallback_results = _search_docs_fallback(vs, search_query, k=4, project_filter=target_project)
                 for doc in fallback_results:
                     if doc not in docs:
                         docs.append(doc)
