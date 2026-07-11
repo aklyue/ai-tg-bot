@@ -156,7 +156,7 @@ def _search_docs_fallback(vs: QdrantVectorStore, query: str, k: int):
 
 
 def _build_prompt_and_search(query: str, history: Optional[List] = None):
-    """Поиск и подготовка промпта с защитой от забивания ТОПа (MMR-алгоритм)"""
+    """Поиск и подготовка промпта через MMR (без текстовых костылей)"""
     if not collection_exists_safe():
         return None, None, None
 
@@ -166,7 +166,6 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
         if prev_questions:
             search_query = " ".join(prev_questions[-2:]) + " " + query
 
-    # Поиск
     vs = QdrantVectorStore(
         client=client,
         collection_name=COLLECTION_NAME,
@@ -182,31 +181,26 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
 
     docs = []
     try:
-        # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Если юзер сравнивает ОБА ЖК сразу
+        # Если в запросе фигурируют ОБА ЖК, включаем жесткое подавление избыточности
         if len(projects) >= 2:
-            # Алгоритм MMR поднимает первые 40 похожих чанков (fetch_k=40),
-            # а затем принудительно выбирает из них k=12 САМЫХ РАЗНООБРАЗНЫХ по смыслу.
-            # Однотипные чанки Алисы будут оштрафованы, и Бестселлер выйдет в ТОП.
-            docs = vs.max_marginal_relevance_search(search_query, k=12, fetch_k=40)
+            # fetch_k=80 заставляет Qdrant поднять ОГРОМНУЮ первую выборку из 80 чанков.
+            # На такой глубине ипотека Бестселлера гарантированно присутствует.
+            # Алгоритм MMR штрафует одинаковые куски Алисы и принудительно вытягивает Бестселлер для разнообразия текста.
+            docs = vs.max_marginal_relevance_search(
+                search_query,
+                k=12,
+                fetch_k=80,
+                lambda_mult=0.3,  # Чем ниже (от 0 до 1), тем агрессивнее алгоритм ищет РАЗНЫЕ темы/ЖК
+            )
         else:
-            # Если упомянут один конкретный ЖК или общий вопрос
-            if projects:
-                docs = _search_relevant_docs(
-                    vs, f"ЖК {projects[0]} {search_query}", k=8
-                )
-                fallback_results = _search_docs_fallback(
-                    vs, f"ЖК {projects[0]} {search_query}", k=4
-                )
-                for doc in fallback_results:
-                    if doc not in docs:
-                        docs.append(doc)
-            else:
-                docs = _search_relevant_docs(vs, search_query, k=12)
+            # Для обычных точечных запросов оставляем твой стандартный поиск
+            docs = _search_relevant_docs(vs, search_query, k=12)
 
     except Exception as e:
         print(f"Ошибка поиска в Qdrant: {e}")
         return None, None, None
 
+    # Очистка от дубликатов по тексту
     seen = set()
     unique_docs = []
     for doc in docs:
@@ -225,7 +219,6 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
         context_parts.append(f"[ИСТОЧНИК: {source}]\n{d.page_content}")
 
     context = "\n\n".join(context_parts)
-
     return context, projects, docs
 
 
