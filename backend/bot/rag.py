@@ -28,7 +28,7 @@ if not OPENAI_API_KEY:
 client = QdrantClient(
     url=os.getenv("QDRANT_URL"),
     api_key=os.getenv("QDRANT_API_KEY"),
-    check_compatibility=False
+    check_compatibility=False,
 )
 
 embeddings = OpenAIEmbeddings(
@@ -85,40 +85,56 @@ def clear_collection():
             print(f"Не удалось удалить коллекцию Qdrant: {e}")
 
 
-def list_sources(limit: int = 100):
-    """Вывести источники, которые реально лежат в Qdrant."""
+def list_sources():
+    """Вывести абсолютно все уникальные источники, которые реально лежат в Qdrant."""
     if not collection_exists_safe():
         print("Коллекция knowledge_base не найдена или Qdrant недоступен")
         return []
 
-    points, _ = client.scroll(
-        collection_name=COLLECTION_NAME,
-        limit=limit,
-        with_payload=True,
-        with_vectors=False,
-    )
-    sources = sorted({point.payload.get("metadata", {}).get("source") or point.payload.get("source") for point in points})
-    sources = [source for source in sources if source]
-    for source in sources:
+    all_sources = set()
+    next_page_offset = None
+
+    # 1. Цикл пагинации: листаем страницы Qdrant до самого конца
+    while True:
+        points, next_page_offset = client.scroll(
+            collection_name=COLLECTION_NAME,
+            limit=100,  # Качаем порциями по 100, чтобы не забивать память
+            offset=next_page_offset,
+            with_payload=True,
+            with_vectors=False,  # Экономим трафик, векторы нам не нужны
+        )
+
+        # 2. Собираем источники. Множество (set) само на лету удаляет дубликаты
+        for point in points:
+            payload = point.payload or {}
+            source = payload.get("metadata", {}).get("source") or payload.get("source")
+            if source:
+                all_sources.add(source)
+
+        # Если Qdrant вернул next_page_offset = None, значит данные кончились
+        if next_page_offset is None:
+            break
+
+    # 3. Сортируем полученный результат по алфавиту
+    sorted_sources = sorted(all_sources)
+
+    for source in sorted_sources:
         print(source)
-    return sources
+
+    return sorted_sources
 
 
 def add_documents_to_db(text: str, metadata: dict):
     """Добавить документ в базу знаний (синхронная функция)"""
-    # Убедимся, что коллекция существует
     ensure_collection_exists()
-    
+
     # Разбиваем текст на чанки
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
         chunk_overlap=200,
     )
-    docs = text_splitter.create_documents(
-        [text],
-        metadatas=[metadata]
-    )
-    
+    docs = text_splitter.create_documents([text], metadatas=[metadata])
+
     # Добавляем в Qdrant
     vs = QdrantVectorStore(
         client=client,
@@ -156,7 +172,7 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
         collection_name=COLLECTION_NAME,
         embedding=embeddings,
     )
-    
+
     query_lower = query.lower()
     projects = []
     if any(word in query_lower for word in ["бестселлер", "bestseller"]):
@@ -180,12 +196,14 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
             docs = _search_relevant_docs(vs, search_query, k=12)
             # Fallback: если указано название ЖК, но релевантных документов нет
             if projects:
-                fallback_results = _search_docs_fallback(vs, f"ЖК {projects[0]} {search_query}", k=5)
+                fallback_results = _search_docs_fallback(
+                    vs, f"ЖК {projects[0]} {search_query}", k=5
+                )
                 # Добавляем fallback-результаты, которые ещё не в docs
                 for doc in fallback_results:
                     if doc not in docs:
                         docs.append(doc)
-        
+
     except Exception as e:
         print(f"Ошибка поиска в Qdrant: {e}")
         return None, None, None
@@ -208,15 +226,17 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
         context_parts.append(f"[ИСТОЧНИК: {source}]\n{d.page_content}")
 
     context = "\n\n".join(context_parts)
-    
+
     return context, projects, docs
 
 
 async def get_answer_stream(query: str, history: Optional[List] = None):
     """Генератор для стриминга ответа от LLM с реальным streaming"""
     # Run search in thread to avoid blocking
-    context, projects, docs = await asyncio.to_thread(_build_prompt_and_search, query, history)
-    
+    context, projects, docs = await asyncio.to_thread(
+        _build_prompt_and_search, query, history
+    )
+
     if context is None:
         yield "Извините, я не нашел информации по вашему вопросу. Пожалуйста, свяжитесь с менеджером."
         return
@@ -238,13 +258,19 @@ async def get_answer_stream(query: str, history: Optional[List] = None):
         f"Вопрос: {query}\n\n"
         f"ИНФОРМАЦИЯ ИЗ БАЗЫ ЗНАНИЙ:\n{context}\n\n"
         f"Правила:\n"
-        f"- Если в информации выше есть данные по вопросу — ответь на основе этих данных\n"
-        f"- Если вопрос про несколько ЖК ({projects_str}) — дай информацию по КАЖДОМУ\n"
-        f"- Если информации нет — скажи, что не знаешь\n"
-        f"- Не выдумывай ничего\n\n"
+        f"- Если в информации выше есть данные по вопросу — ответь на основе этих данных.\n"
+        f"- Если вопрос про несколько ЖК ({projects_str}) — дай информацию по КАЖДОМУ.\n"
+        f"- Если информации нет — скажи, что не знаешь.\n"
+        f"- Не выдумывай ничего.\n"
+        f"- СТРОГОЕ ФОРМАТИРОВАНИЕ ДЛЯ TELEGRAM HTML:\n"
+        f"  1. Пиши ответ БЕЗ использования Markdown (ЗАПРЕЩЕНЫ символы **, #, _, `).\n"
+        f"  2. Для выделения используй исключительно HTML-теги: <b>жирный</b>, <i>курсив</i>, <code>код</code>.\n"
+        f"  3. Всегда закрывай открытые теги (недопустимо оставить <b> без </b>).\n"
+        f"  4. Для списков используй обычный перенос строки и дефисы. Теги <ul>, <li> и <br> ЗАПРЕЩЕНЫ.\n"
+        f"  5. Если не уверен в валидности HTML-тегов, отдавай чистый текст без какого-либо форматирования.\n\n"
         f"Ответ:"
     )
-    
+
     messages.append(("human", user_message))
 
     prompt = ChatPromptTemplate.from_messages(messages)
@@ -260,8 +286,10 @@ async def get_answer_stream(query: str, history: Optional[List] = None):
 
 async def get_answer(query: str, history: Optional[List] = None) -> str:
     """Асинхронный ответ (обертка над синхронным)"""
-    context, projects, docs = await asyncio.to_thread(_build_prompt_and_search, query, history)
-    
+    context, projects, docs = await asyncio.to_thread(
+        _build_prompt_and_search, query, history
+    )
+
     if context is None:
         return "Извините, я не нашел информации по вашему вопросу. Пожалуйста, свяжитесь с менеджером."
 
@@ -288,7 +316,7 @@ async def get_answer(query: str, history: Optional[List] = None) -> str:
         f"- Не выдумывай ничего\n\n"
         f"Ответ:"
     )
-    
+
     messages.append(("human", user_message))
 
     prompt = ChatPromptTemplate.from_messages(messages)
