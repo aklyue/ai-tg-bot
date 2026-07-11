@@ -24,6 +24,30 @@ def log_parsing(source: str, status: str, message: str):
     }
     parsing_log.append(entry)
     print(f"[{status}] {source}: {message}")
+    
+
+def get_project_tag(name: str) -> str:
+    """Определяет тег ЖК на основе названия источника."""
+    name_lower = name.lower()
+    if "алиса" in name_lower:
+        return "Алиса"
+    elif "бестселлер" in name_lower:
+        return "Бестселлер"
+    return "Общие"
+
+async def save_to_db(url: str, text: str):
+    """Единая точка входа для сохранения данных в базу."""
+    meta = SOURCES_META.get(url, {"name": url})
+    project_tag = get_project_tag(meta.get("name", ""))
+    
+    metadata = {
+        "source": url,
+        "project": project_tag
+    }
+    
+    # Сохранение
+    await asyncio.to_thread(add_documents_to_db, text, metadata=metadata)
+    log_parsing(url, "SUCCESS", f"{meta.get('name')}: {len(text)} символов")
 
 
 def extract_ooxml_text(content: bytes, suffix: str) -> str:
@@ -234,8 +258,8 @@ async def parse_website(url: str):
 
             enriched = f"Информация о {meta['name']}. Сайт: {url}\n\n{content}"
             log_parsing(url, "INFO", "Отправка данных в базу знаний...")
-            await asyncio.to_thread(add_documents_to_db, enriched, {"source": url, "type": "website"})
-            log_parsing(url, "SUCCESS", f"{meta['name']}: {len(content)} символов, {len(internal_pages)} страниц")
+            
+            await save_to_db(url, enriched)
             return True
     except Exception as e:
         log_parsing(url, "ERROR", f"{meta['name']}: {e}")
@@ -284,8 +308,7 @@ async def parse_document(url: str):
                 
                 text = "\n\n".join(text_parts) if text_parts else data.get("name", "Yandex Disk")
                 enriched = f"Информация из документа: {meta['name']}. Ссылка: {url}\n\n{text}"
-                await asyncio.to_thread(add_documents_to_db, enriched, {"source": url, "type": "document"})
-                log_parsing(url, "SUCCESS", f"{meta['name']}: {len(text)} символов, {len(text_parts)} файлов")
+                await save_to_db(url, enriched)
                 return True
 
         if "docs.google.com" in url:
@@ -304,8 +327,7 @@ async def parse_document(url: str):
                     if response.status == 200:
                         text = await response.text()
                         enriched = f"Информация из документа: {meta['name']}. Ссылка: {url}\n\n{text}"
-                        await asyncio.to_thread(add_documents_to_db, enriched, {"source": url, "type": "document"})
-                        log_parsing(url, "SUCCESS", f"{meta['name']}: {len(text)} символов")
+                        await save_to_db(url, enriched)
                         return True
                     else:
                         log_parsing(url, "ERROR", f"HTTP {response.status}")
@@ -332,8 +354,7 @@ async def parse_document(url: str):
                         for page in reader.pages:
                             text += page.extract_text() + "\n"
                         enriched = f"Информация из документа: {meta['name']}. Ссылка: {url}\n\n{text}"
-                        await asyncio.to_thread(add_documents_to_db, enriched, {"source": url, "type": "document"})
-                        log_parsing(url, "SUCCESS", f"{meta['name']}: {len(text)} символов")
+                        await save_to_db(url, enriched)
                     except ImportError:
                         log_parsing(url, "WARNING", "Установите pypdf")
                     finally:
@@ -343,28 +364,25 @@ async def parse_document(url: str):
                     content = await response.read()
                     text = extract_zip_text(content)
                     enriched = f"Информация из документа: {meta['name']}. Ссылка: {url}\n\n{text}"
-                    await asyncio.to_thread(add_documents_to_db, enriched, {"source": url, "type": "document"})
-                    log_parsing(url, "SUCCESS", f"{meta['name']}: {len(text)} символов")
+                    await save_to_db(url, enriched)
                     return True
                 elif lower_url.endswith(".docx"):
                     content = await response.read()
                     text = extract_ooxml_text(content, ".docx")
                     enriched = f"Информация из документа: {meta['name']}. Ссылка: {url}\n\n{text}"
-                    await asyncio.to_thread(add_documents_to_db, enriched, {"source": url, "type": "document"})
-                    log_parsing(url, "SUCCESS", f"{meta['name']}: {len(text)} символов")
+                    # Получаем данные из конфига
+                    await save_to_db(url, enriched)
                     return True
                 elif lower_url.endswith(".pptx"):
                     content = await response.read()
                     text = extract_ooxml_text(content, ".pptx")
                     enriched = f"Информация из документа: {meta['name']}. Ссылка: {url}\n\n{text}"
-                    await asyncio.to_thread(add_documents_to_db, enriched, {"source": url, "type": "document"})
-                    log_parsing(url, "SUCCESS", f"{meta['name']}: {len(text)} символов")
+                    await save_to_db(url, enriched)
                     return True
                 else:
                     text = await response.text()
                     enriched = f"Информация из документа: {meta['name']}. Ссылка: {url}\n\n{text}"
-                    await asyncio.to_thread(add_documents_to_db, enriched, {"source": url, "type": "document"})
-                    log_parsing(url, "SUCCESS", f"{meta['name']}: {len(text)} символов")
+                    await save_to_db(url, enriched)
                     return True
     except Exception as e:
         log_parsing(url, "ERROR", f"{meta['name']}: {e}")
