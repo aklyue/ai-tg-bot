@@ -184,7 +184,17 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
     try:
         if len(projects) >= 2:
             for project in projects:
-                project_query = f"ЖК {project} {query}"
+                # 1. Определяем, кто конкурент для текущего цикла
+                other_project = "Алиса" if project == "Бестселлер" else "Бестселлер"
+                
+                # 2. Полностью вырезаем конкурента из запроса, чтобы не косило вектор
+                # Строка 'Сравни ипотеку ЖК Алиса и ЖК Бестселлер' превратится в 'Сравни ипотеку ЖК '
+                clean_query = query.lower().replace(other_project.lower(), "").strip()
+                
+                # 3. Собираем идеальный прицельный запрос для базы
+                # Получится: 'ЖК Бестселлер Сравни ипотеку'
+                project_query = f"ЖК {project} {clean_query}"
+                
                 results = _search_relevant_docs(vs, project_query, k=6)
                 fallback_results = _search_docs_fallback(vs, project_query, k=6)
                 for doc in fallback_results:
