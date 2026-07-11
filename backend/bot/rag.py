@@ -163,16 +163,10 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
         unique_docs: list[Document]
     """
 
-    # ---------------------------------------------------------
-    # Проверка коллекции
-    # ---------------------------------------------------------
     if not client.collection_exists(collection_name=COLLECTION_NAME):
         print(f"DEBUG: Коллекция '{COLLECTION_NAME}' не существует")
         return None, [], []
 
-    # ---------------------------------------------------------
-    # Формирование поискового запроса
-    # ---------------------------------------------------------
     search_query = query.strip()
 
     if history:
@@ -189,18 +183,12 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
 
     print(f"\nDEBUG: search_query = {search_query}")
 
-    # ---------------------------------------------------------
-    # Подключение к VectorStore
-    # ---------------------------------------------------------
     vs = QdrantVectorStore(
         client=client,
         collection_name=COLLECTION_NAME,
         embedding=embeddings,
     )
 
-    # ---------------------------------------------------------
-    # Определяем проект
-    # ---------------------------------------------------------
     query_lower = query.lower()
 
     projects = []
@@ -213,24 +201,18 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
 
     print(f"DEBUG: projects = {projects}")
 
-    # ---------------------------------------------------------
-    # Создаем фильтр
-    # ---------------------------------------------------------
     qdrant_filter = None
 
     if projects:
         qdrant_filter = Filter(
             must=[
                 FieldCondition(
-                    key="project",
+                    key="metadata.project",
                     match=MatchAny(any=projects),
                 )
             ]
         )
 
-    # ---------------------------------------------------------
-    # Поиск
-    # ---------------------------------------------------------
     try:
         if qdrant_filter:
             docs = vs.similarity_search(
