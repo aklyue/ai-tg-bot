@@ -220,18 +220,17 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
     try:
         if qdrant_filter:
             docs = vs.max_marginal_relevance_search(
-                search_query, k=15, fetch_k=50, filter=filter
+                search_query,
+                k=15,
+                fetch_k=50,
+                filter=qdrant_filter,
             )
-            
-            print("\n=== QDRANT RESULT ===")
-            for i, doc in enumerate(docs):
-                print(f"\nDOC {i}")
-                print("PROJECT:", doc.metadata.get("project"))
-                print(doc.page_content[:500])
-
-            print(f"DEBUG: найдено с фильтром = {len(docs)}")
         else:
-            docs = []
+            docs = vs.max_marginal_relevance_search(
+                search_query,
+                k=15,
+                fetch_k=50,
+            )
 
         # fallback
         if not docs:
