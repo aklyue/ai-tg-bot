@@ -12,29 +12,27 @@ client = QdrantClient(
 )
 
 
-records, _ = client.scroll(
-    collection_name=COLLECTION,
-    limit=3,
-    with_payload=True,
-    with_vectors=False,
-)
+offset = None
 
+while True:
+    records, offset = client.scroll(
+        collection_name=COLLECTION,
+        limit=100,
+        offset=offset,
+        with_payload=True,
+        with_vectors=False,
+    )
 
-for i, rec in enumerate(records):
+    for rec in records:
+        payload = rec.payload
 
-    print("\n" + "=" * 80)
-    print(f"ЗАПИСЬ {i + 1}")
-    print("=" * 80)
+        source = payload.get("metadata", {}).get("source", "")
 
-    print("ID:")
-    print(rec.id)
+        if "1eoDdo42FXrV6unkQhlmaOMQFupOpdnRFjM7_oZDP9XU" in source:
+            print("=" * 80)
+            print("НАШЕЛ ДОКУМЕНТ")
+            print(payload)
+            print("=" * 80)
 
-    print("\nPAYLOAD:")
-    print(json.dumps(
-        rec.payload,
-        indent=4,
-        ensure_ascii=False
-    ))
-
-    print("\nКЛЮЧИ PAYLOAD:")
-    print(list(rec.payload.keys()))
+    if offset is None:
+        break
