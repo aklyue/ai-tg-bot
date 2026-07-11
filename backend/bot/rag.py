@@ -156,8 +156,9 @@ def _search_docs_fallback(vs: QdrantVectorStore, query: str, k: int):
 
 
 def _build_prompt_and_search(query: str, history: Optional[List] = None):
-    """Поиск и подготовка промпта через MMR (без текстовых костылей)"""
-    if not collection_exists_safe():
+    """Поиск с использованием фильтрации проектов и пороговой релевантности."""
+
+    if not client.collection_exists(collection_name=COLLECTION_NAME):
         return None, None, None
 
     search_query = query
@@ -167,11 +168,10 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
             search_query = " ".join(prev_questions[-2:]) + " " + query
 
     vs = QdrantVectorStore(
-        client=client,
-        collection_name=COLLECTION_NAME,
-        embedding=embeddings,
+        client=client, collection_name=COLLECTION_NAME, embedding=embeddings
     )
 
+    # Определяем проекты
     query_lower = query.lower()
     projects = []
     if any(word in query_lower for word in ["бестселлер", "bestseller"]):
@@ -179,47 +179,48 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
     if any(word in query_lower for word in ["алиса", "alisa"]):
         projects.append("Алиса")
 
+    # Формируем фильтр для Qdrant (чтобы поиск шел только в рамках нужного ЖК)
+    filter_dict = (
+        {"must": [{"key": "project", "match": {"any": projects}}]} if projects else None
+    )
+
     docs = []
     try:
-        # Если в запросе фигурируют ОБА ЖК, включаем жесткое подавление избыточности
-        if len(projects) >= 2:
-            # fetch_k=80 заставляет Qdrant поднять ОГРОМНУЮ первую выборку из 80 чанков.
-            # На такой глубине ипотека Бестселлера гарантированно присутствует.
-            # Алгоритм MMR штрафует одинаковые куски Алисы и принудительно вытягивает Бестселлер для разнообразия текста.
-            docs = vs.max_marginal_relevance_search(
-                search_query,
-                k=12,
-                fetch_k=80,
-                lambda_mult=0.3,  # Чем ниже (от 0 до 1), тем агрессивнее алгоритм ищет РАЗНЫЕ темы/ЖК
-            )
+        if projects:
+            # Сначала пытаемся найти строго по ЖК через твои функции с фильтром
+            # Внимание: убедись, что твои _search_... умеют принимать параметр filter
+            docs = _search_relevant_docs(vs, search_query, k=8, filter=filter_dict)
+
+            # Если пороговый поиск ничего не дал, используем fallback
+            if not docs:
+                docs = _search_docs_fallback(vs, search_query, k=4, filter=filter_dict)
         else:
-            # Для обычных точечных запросов оставляем твой стандартный поиск
+            # Общий запрос без фильтра
             docs = _search_relevant_docs(vs, search_query, k=12)
 
     except Exception as e:
-        print(f"Ошибка поиска в Qdrant: {e}")
+        print(f"Ошибка поиска: {e}")
         return None, None, None
 
-    # Очистка от дубликатов по тексту
+    # Дедупликация
     seen = set()
     unique_docs = []
     for doc in docs:
-        if doc.page_content not in seen:
-            seen.add(doc.page_content)
+        if doc.page_content.strip() not in seen:
+            seen.add(doc.page_content.strip())
             unique_docs.append(doc)
 
-    docs = unique_docs[:12]
-
-    if not docs:
+    if not unique_docs:
         return None, None, None
 
-    context_parts = []
-    for d in docs:
-        source = d.metadata.get("source", "неизвестный источник")
-        context_parts.append(f"[ИСТОЧНИК: {source}]\n{d.page_content}")
+    context = "\n\n".join(
+        [
+            f"[ИСТОЧНИК: {d.metadata.get('source')}]\n{d.page_content}"
+            for d in unique_docs
+        ]
+    )
 
-    context = "\n\n".join(context_parts)
-    return context, projects, docs
+    return context, projects, unique_docs
 
 
 async def get_answer_stream(query: str, history: Optional[List] = None):
