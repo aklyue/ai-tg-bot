@@ -16,7 +16,7 @@ from qdrant_client.http.models import (
 from typing import List, Optional
 import asyncio
 
-from parser import SOURCES_META
+from bot.config import SOURCES_META
 
 from dotenv import load_dotenv
 
