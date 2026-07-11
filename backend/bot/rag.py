@@ -5,7 +5,13 @@ from langchain_qdrant import QdrantVectorStore
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.prompts import ChatPromptTemplate
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import Distance, VectorParams, Filter, FieldCondition, MatchAny
+from qdrant_client.http.models import (
+    Distance,
+    VectorParams,
+    Filter,
+    FieldCondition,
+    MatchAny,
+)
 from typing import List, Optional
 import asyncio
 
@@ -173,9 +179,7 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
         prev_questions = [
             msg[1]
             for msg in history[-4:]
-            if isinstance(msg, (list, tuple))
-            and len(msg) >= 2
-            and msg[0] == "user"
+            if isinstance(msg, (list, tuple)) and len(msg) >= 2 and msg[0] == "user"
         ]
 
         if prev_questions:
@@ -215,11 +219,15 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
 
     try:
         if qdrant_filter:
-            docs = vs.similarity_search(
-                search_query,
-                k=12,
-                filter=qdrant_filter,
+            docs = vs.max_marginal_relevance_search(
+                search_query, k=15, fetch_k=50, filter=filter
             )
+            
+            print("\n=== QDRANT RESULT ===")
+            for i, doc in enumerate(docs):
+                print(f"\nDOC {i}")
+                print("PROJECT:", doc.metadata.get("project"))
+                print(doc.page_content[:500])
 
             print(f"DEBUG: найдено с фильтром = {len(docs)}")
         else:
@@ -231,13 +239,14 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
 
             docs = vs.similarity_search(
                 search_query,
-                k=12,
+                k=5,
             )
 
             print(f"DEBUG: найдено без фильтра = {len(docs)}")
 
     except Exception as e:
         import traceback
+
         traceback.print_exc()
 
     # ---------------------------------------------------------
@@ -281,13 +290,11 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
         source = doc.metadata.get("source", "unknown")
         project = doc.metadata.get("project", "unknown")
 
-        context_parts.append(
-            f"""Источник: {source}
+        context_parts.append(f"""Источник: {source}
 Проект: {project}
 
 {doc.page_content}
-"""
-        )
+""")
 
     context = "\n\n------------------------\n\n".join(context_parts)
 
