@@ -255,8 +255,8 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
             print(f"DEBUG: найдено без фильтра = {len(docs)}")
 
     except Exception as e:
-        print(f"DEBUG: ошибка поиска: {e}")
-        return None, projects, []
+        import traceback
+        traceback.print_exc()
 
     # ---------------------------------------------------------
     # Логируем найденные документы
