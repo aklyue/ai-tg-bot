@@ -156,84 +156,164 @@ def _search_docs_fallback(vs: QdrantVectorStore, query: str, k: int):
 
 
 def _build_prompt_and_search(query: str, history: Optional[List] = None):
-    """Полный поиск с использованием официальной модели фильтрации Qdrant."""
+    """
+    Выполняет поиск по Qdrant и возвращает:
+        context: str | None
+        projects: list[str]
+        unique_docs: list[Document]
+    """
 
-    # 1. Проверка коллекции
+    # ---------------------------------------------------------
+    # Проверка коллекции
+    # ---------------------------------------------------------
     if not client.collection_exists(collection_name=COLLECTION_NAME):
-        print("DEBUG: Коллекция не найдена!")
-        return None, None, None
+        print(f"DEBUG: Коллекция '{COLLECTION_NAME}' не существует")
+        return None, [], []
 
-    # 2. Подготовка запроса
-    search_query = query
+    # ---------------------------------------------------------
+    # Формирование поискового запроса
+    # ---------------------------------------------------------
+    search_query = query.strip()
+
     if history:
-        prev_questions = [msg[1] for msg in history[-4:] if msg[0] == "user"]
+        prev_questions = [
+            msg[1]
+            for msg in history[-4:]
+            if isinstance(msg, (list, tuple))
+            and len(msg) >= 2
+            and msg[0] == "user"
+        ]
+
         if prev_questions:
             search_query = " ".join(prev_questions[-2:]) + " " + query
 
-    # 3. Инициализация хранилища
+    print(f"\nDEBUG: search_query = {search_query}")
+
+    # ---------------------------------------------------------
+    # Подключение к VectorStore
+    # ---------------------------------------------------------
     vs = QdrantVectorStore(
         client=client,
         collection_name=COLLECTION_NAME,
         embedding=embeddings,
     )
 
-    # 4. Определение проектов
+    # ---------------------------------------------------------
+    # Определяем проект
+    # ---------------------------------------------------------
     query_lower = query.lower()
+
     projects = []
-    if any(word in query_lower for word in ["бестселлер", "bestseller"]):
-        projects.append("Бестселлер")
-    if any(word in query_lower for word in ["алиса", "alisa"]):
+
+    if any(x in query_lower for x in ["алиса", "alisa"]):
         projects.append("Алиса")
 
-    print(f"DEBUG: Поиск по проектам: {projects}")
+    if any(x in query_lower for x in ["бестселлер", "bestseller"]):
+        projects.append("Бестселлер")
 
-    # 5. Поиск
-    docs = []
+    print(f"DEBUG: projects = {projects}")
+
+    # ---------------------------------------------------------
+    # Создаем фильтр
+    # ---------------------------------------------------------
+    qdrant_filter = None
+
+    if projects:
+        qdrant_filter = Filter(
+            must=[
+                FieldCondition(
+                    key="project",
+                    match=MatchAny(any=projects),
+                )
+            ]
+        )
+
+    # ---------------------------------------------------------
+    # Поиск
+    # ---------------------------------------------------------
     try:
-        # Создаем фильтр через официальную модель, а не словарь
-        qdrant_filter = None
-        if projects:
-            qdrant_filter = Filter(
-                must=[
-                    FieldCondition(
-                        key="project", match=MatchAny(any=projects)
-                    )
-                ]
+        if qdrant_filter:
+            docs = vs.similarity_search(
+                search_query,
+                k=12,
+                filter=qdrant_filter,
             )
 
-        # Пытаемся найти с фильтром
-        docs = vs.similarity_search(search_query, k=12, filter=qdrant_filter)
-        print(f"DEBUG: Найдено с фильтром: {len(docs)}")
+            print(f"DEBUG: найдено с фильтром = {len(docs)}")
+        else:
+            docs = []
 
-        # Если пусто — fallback
+        # fallback
         if not docs:
-            print("DEBUG: Фильтр ничего не дал, пробуем fallback без фильтра...")
-            docs = vs.similarity_search(search_query, k=12)
+            print("DEBUG: fallback без фильтра")
+
+            docs = vs.similarity_search(
+                search_query,
+                k=12,
+            )
+
+            print(f"DEBUG: найдено без фильтра = {len(docs)}")
 
     except Exception as e:
-        print(f"DEBUG: Критическая ошибка поиска: {e}")
-        return None, None, None
+        print(f"DEBUG: ошибка поиска: {e}")
+        return None, projects, []
 
-    # 6. Дедупликация
+    # ---------------------------------------------------------
+    # Логируем найденные документы
+    # ---------------------------------------------------------
+    if docs:
+        for i, doc in enumerate(docs):
+            print("\n" + "=" * 80)
+            print(f"Документ {i + 1}")
+
+            print("metadata:")
+            print(doc.metadata)
+
+            print("content:")
+            print(doc.page_content[:300])
+
+    # ---------------------------------------------------------
+    # Дедупликация
+    # ---------------------------------------------------------
     seen = set()
     unique_docs = []
+
     for doc in docs:
-        content = doc.page_content.strip()
-        if content and content not in seen:
-            seen.add(content)
+        text = doc.page_content.strip()
+
+        if text and text not in seen:
+            seen.add(text)
             unique_docs.append(doc)
 
-    if not unique_docs:
-        print("DEBUG: После дедупликации документов нет.")
-        return None, None, None
+    print(f"\nDEBUG: после дедупликации = {len(unique_docs)}")
 
-    # 7. Сборка контекста
-    context = "\n\n".join(
-        [
-            f"[ИСТОЧНИК: {d.metadata.get('source', 'unknown')}]\n{d.page_content}"
-            for d in unique_docs
-        ]
-    )
+    if not unique_docs:
+        return None, projects, []
+
+    # ---------------------------------------------------------
+    # Формируем контекст
+    # ---------------------------------------------------------
+    context_parts = []
+
+    for doc in unique_docs:
+        source = doc.metadata.get("source", "unknown")
+        project = doc.metadata.get("project", "unknown")
+
+        context_parts.append(
+            f"""Источник: {source}
+Проект: {project}
+
+{doc.page_content}
+"""
+        )
+
+    context = "\n\n------------------------\n\n".join(context_parts)
+
+    print("\n" + "=" * 80)
+    print("КОНТЕКСТ ДЛЯ LLM")
+    print("=" * 80)
+    print(context[:5000])
+    print("=" * 80)
 
     return context, projects, unique_docs
 
