@@ -110,7 +110,6 @@ async def stream_answer(message: types.Message, query: str, history: list):
     """Стриминг ответа от LLM с настоящим streaming"""
     logging.info("DEBUG: stream_answer - Начало")
 
-    # Отправляем начальное сообщение
     msg = await message.answer("⏳ Думаю...")
     logging.info("DEBUG: stream_answer - Сообщение 'Думаю' отправлено")
 
@@ -122,7 +121,6 @@ async def stream_answer(message: types.Message, query: str, history: list):
         async for chunk in get_answer_stream(query, history):
             full_text += chunk
 
-            # Обновляем сообщение реже
             if len(full_text) - last_update_len >= update_interval:
                 try:
                     await bot.edit_message_text(
@@ -196,7 +194,7 @@ async def handle_voice(message: types.Voice):
 @dp.message(F.text, F.text.startswith("/start"))
 async def handle_start(message: types.Message):
     user_id = message.from_user.id
-    dialogues[user_id] = []  # Очищаем историю
+    dialogues[user_id] = []
     await message.answer(
         "👋 Здравствуйте! Я — ассистент агента по недвижимости.\n\n"
         "Я могу помочь с вопросами по:\n"
