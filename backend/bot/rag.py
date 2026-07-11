@@ -5,7 +5,7 @@ from langchain_qdrant import QdrantVectorStore
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.prompts import ChatPromptTemplate
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import Distance, VectorParams
+from qdrant_client.http.models import Distance, VectorParams, Filter, FieldCondition, MatchAny
 from typing import List, Optional
 import asyncio
 
@@ -156,7 +156,7 @@ def _search_docs_fallback(vs: QdrantVectorStore, query: str, k: int):
 
 
 def _build_prompt_and_search(query: str, history: Optional[List] = None):
-    """Полный поиск с фильтрацией, fallback и отладкой метаданных."""
+    """Полный поиск с использованием официальной модели фильтрации Qdrant."""
 
     # 1. Проверка коллекции
     if not client.collection_exists(collection_name=COLLECTION_NAME):
@@ -190,32 +190,28 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
     # 5. Поиск
     docs = []
     try:
+        # Создаем фильтр через официальную модель, а не словарь
+        qdrant_filter = None
         if projects:
-            # Пытаемся найти с фильтром по проектам
-            filter_dict = {"must": [{"key": "project", "match": {"any": projects}}]}
-            # Используем similarity_search напрямую для контроля
-            docs = vs.similarity_search(search_query, k=12, filter=filter_dict)
+            qdrant_filter = Filter(
+                must=[
+                    FieldCondition(
+                        key="project", match=MatchAny(any=projects)
+                    )
+                ]
+            )
 
-            print(f"DEBUG: Найдено с фильтром: {len(docs)}")
+        # Пытаемся найти с фильтром
+        docs = vs.similarity_search(search_query, k=12, filter=qdrant_filter)
+        print(f"DEBUG: Найдено с фильтром: {len(docs)}")
 
-            # Если с фильтром пусто - пробуем fallback (вдруг ошибка в ключе метаданных)
-            if not docs:
-                print("DEBUG: Фильтр ничего не дал, пробуем fallback без фильтра...")
-                docs = vs.similarity_search(search_query, k=12)
-        else:
-            # Общий поиск
+        # Если пусто — fallback
+        if not docs:
+            print("DEBUG: Фильтр ничего не дал, пробуем fallback без фильтра...")
             docs = vs.similarity_search(search_query, k=12)
-            print(f"DEBUG: Общий поиск (без фильтра), найдено: {len(docs)}")
 
     except Exception as e:
         print(f"DEBUG: Критическая ошибка поиска: {e}")
-        return None, None, None
-
-    # Отладка метаданных (если нашли хоть что-то)
-    if docs:
-        print(f"DEBUG: Метаданные первого дока: {docs[0].metadata}")
-    else:
-        print("DEBUG: Поиск вернул пустой список документов.")
         return None, None, None
 
     # 6. Дедупликация
@@ -228,12 +224,13 @@ def _build_prompt_and_search(query: str, history: Optional[List] = None):
             unique_docs.append(doc)
 
     if not unique_docs:
+        print("DEBUG: После дедупликации документов нет.")
         return None, None, None
 
     # 7. Сборка контекста
     context = "\n\n".join(
         [
-            f"[ИСТОЧНИК: {d.metadata.get('source')}]\n{d.page_content}"
+            f"[ИСТОЧНИК: {d.metadata.get('source', 'unknown')}]\n{d.page_content}"
             for d in unique_docs
         ]
     )
